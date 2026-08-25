@@ -170,21 +170,34 @@ function refreshAllTaxonomyUI() {
   }
 }
 
+// Only active employees, since this populates "assign this equipment
+// to..." pickers - an inactive employee shouldn't receive anything
+// new (their existing history stays visible elsewhere, e.g. the
+// Look Up Employee lookup, which shows everyone).
 function populateProfileSelect(selectEl) {
   const current = selectEl.value
   selectEl.innerHTML = ''
-  ;[...profileEmailById.entries()].forEach(([id, email]) => {
-    const opt = document.createElement('option')
-    opt.value = id
-    opt.textContent = email
-    selectEl.appendChild(opt)
-  })
+  ;[...profileEmailById.entries()]
+    .filter(([id]) => profilesById.get(id)?.active !== false)
+    .forEach(([id, email]) => {
+      const opt = document.createElement('option')
+      opt.value = id
+      opt.textContent = email
+      selectEl.appendChild(opt)
+    })
   if ([...selectEl.options].some((o) => o.value === current)) selectEl.value = current
 }
 
+// profileEmailById stays a plain id->email lookup, used all over this
+// file already; profilesById carries the extra fields (is_admin,
+// active) the new Employees & Access panel needs, without touching
+// every existing call site that only ever wanted the email.
+let profilesById = new Map()
+
 async function loadProfilesMap() {
-  const { data } = await supabase.from('profiles').select('id,email')
+  const { data } = await supabase.from('profiles').select('id,email,is_admin,active')
   profileEmailById = new Map((data || []).map((p) => [p.id, p.email]))
+  profilesById = new Map((data || []).map((p) => [p.id, p]))
 }
 
 function nowIso() {
@@ -376,6 +389,7 @@ async function enterApp() {
     loadAssets()
     loadConsumableLog()
     loadReminders()
+    loadEmployeesTable()
     setupReminderRealtime()
   }
 }
@@ -1405,7 +1419,7 @@ function populateLookupEmployeeSelect() {
   ;[...profileEmailById.entries()].forEach(([id, email]) => {
     const opt = document.createElement('option')
     opt.value = id
-    opt.textContent = email
+    opt.textContent = email + (profilesById.get(id)?.active === false ? ' (inactive)' : '')
     selectEl.appendChild(opt)
   })
   if ([...selectEl.options].some((o) => o.value === current)) selectEl.value = current
@@ -1834,3 +1848,163 @@ document.getElementById('export-equipment-report-btn').addEventListener('click',
 
   XLSX.writeFile(wb, `Equipment_Report_${new Date().toISOString().slice(0, 10)}.xlsx`)
 })
+
+// ============================== Employees & Access ================================
+// Anything needing Supabase's admin API (create a login, deactivate/
+// reactivate, set a password) goes through the "employee-admin" Edge
+// Function (supabase/functions/employee-admin/) - see that file's own
+// comment for why this can't be done directly from the browser.
+// Toggling the "Admin" checkbox on an existing employee is the one
+// exception: that's a plain column update the "profiles_admin_update"
+// RLS policy already allows directly, no admin API needed for a
+// simple boolean flip.
+
+// supabase-js resolves `error` (not `data`) for any non-2xx response
+// from an Edge Function, and error.message is a generic "non-2xx
+// status" string - the function's own {error: "..."} JSON body is
+// only reachable via error.context (the raw Response). This centralizes
+// that unwrapping so every call site below gets the real message.
+async function invokeEmployeeAdmin(body) {
+  const { data, error } = await supabase.functions.invoke('employee-admin', { body })
+
+  if (error) {
+    let message = error.message
+    try {
+      const parsed = await error.context.json()
+      if (parsed?.error) message = parsed.error
+    } catch (e) { /* fall back to error.message as-is */ }
+    return { ok: false, error: message }
+  }
+
+  if (data?.error) return { ok: false, error: data.error }
+  return { ok: true, data }
+}
+
+document.getElementById('add-employee-form').addEventListener('submit', async (e) => {
+  e.preventDefault()
+
+  const errorEl = document.getElementById('add-employee-error')
+  errorEl.textContent = ''
+
+  const email = document.getElementById('new-employee-email').value.trim()
+  const password = document.getElementById('new-employee-password').value
+  const isAdmin = document.getElementById('new-employee-admin').checked
+
+  const result = await invokeEmployeeAdmin({ action: 'create', email, password, isAdmin })
+
+  if (!result.ok) {
+    errorEl.textContent = result.error
+    return
+  }
+
+  e.target.reset()
+  await loadProfilesMap()
+  loadEmployeesTable()
+  refreshAllTaxonomyUI() // re-populate every dropdown that lists employees
+})
+
+function loadEmployeesTable() {
+  const activeBody = document.querySelector('#employees-active-table tbody')
+  const inactiveBody = document.querySelector('#employees-inactive-table tbody')
+  activeBody.innerHTML = ''
+  inactiveBody.innerHTML = ''
+
+  const profiles = [...profilesById.values()].sort((a, b) => a.email.localeCompare(b.email))
+
+  profiles.forEach((p) => {
+    if (p.active === false) {
+      const tr = document.createElement('tr')
+
+      const emailTd = document.createElement('td')
+      emailTd.textContent = p.email
+      tr.appendChild(emailTd)
+
+      const actionTd = document.createElement('td')
+      const reactivateBtn = document.createElement('button')
+      reactivateBtn.type = 'button'
+      reactivateBtn.textContent = 'Reactivate'
+      reactivateBtn.addEventListener('click', () => setEmployeeActive(p.id, true))
+      actionTd.appendChild(reactivateBtn)
+      tr.appendChild(actionTd)
+
+      inactiveBody.appendChild(tr)
+      return
+    }
+
+    const tr = document.createElement('tr')
+
+    const emailTd = document.createElement('td')
+    emailTd.textContent = p.email
+    tr.appendChild(emailTd)
+
+    const adminTd = document.createElement('td')
+    const adminCheckbox = document.createElement('input')
+    adminCheckbox.type = 'checkbox'
+    adminCheckbox.checked = !!p.is_admin
+    adminCheckbox.disabled = p.id === currentUserId // don't let an admin demote themself by accident
+    adminCheckbox.addEventListener('change', () => toggleEmployeeAdmin(p.id, adminCheckbox.checked))
+    adminTd.appendChild(adminCheckbox)
+    tr.appendChild(adminTd)
+
+    const actionsTd = document.createElement('td')
+    const controls = document.createElement('div')
+    controls.className = 'admin-controls'
+
+    const passwordInput = document.createElement('input')
+    passwordInput.type = 'text'
+    passwordInput.placeholder = 'New password'
+    passwordInput.style.width = '120px'
+
+    const setPasswordBtn = document.createElement('button')
+    setPasswordBtn.type = 'button'
+    setPasswordBtn.textContent = 'Set Password'
+    setPasswordBtn.addEventListener('click', () => setEmployeePassword(p.id, passwordInput))
+
+    const deactivateBtn = document.createElement('button')
+    deactivateBtn.type = 'button'
+    deactivateBtn.textContent = 'Deactivate'
+    deactivateBtn.disabled = p.id === currentUserId // don't let an admin lock themself out
+    deactivateBtn.addEventListener('click', () => setEmployeeActive(p.id, false))
+
+    controls.append(passwordInput, setPasswordBtn, deactivateBtn)
+    actionsTd.appendChild(controls)
+    tr.appendChild(actionsTd)
+
+    activeBody.appendChild(tr)
+  })
+}
+
+async function toggleEmployeeAdmin(userId, isAdmin) {
+  const { error } = await supabase.from('profiles').update({ is_admin: isAdmin }).eq('id', userId)
+  if (error) alert('Could not update: ' + error.message)
+  await loadProfilesMap()
+  loadEmployeesTable()
+}
+
+async function setEmployeeActive(userId, active) {
+  const result = await invokeEmployeeAdmin({ action: 'setActive', userId, active })
+  if (!result.ok) {
+    alert('Could not update: ' + result.error)
+    return
+  }
+  await loadProfilesMap()
+  loadEmployeesTable()
+  refreshAllTaxonomyUI()
+}
+
+async function setEmployeePassword(userId, inputEl) {
+  const newPassword = inputEl.value
+  if (!newPassword || newPassword.length < 6) {
+    alert('Enter a password of at least 6 characters.')
+    return
+  }
+
+  const result = await invokeEmployeeAdmin({ action: 'setPassword', userId, newPassword })
+  if (!result.ok) {
+    alert('Could not set password: ' + result.error)
+    return
+  }
+
+  inputEl.value = ''
+  alert('Password updated.')
+}

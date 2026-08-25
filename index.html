@@ -379,6 +379,45 @@
             <button type="submit">Add</button>
           </form>
         </div>
+
+        <div class="manage-box manage-box-wide">
+          <h3>Employees &amp; Access</h3>
+          <p class="hint-text">
+            Creates a real login directly - they can sign in immediately
+            with the email/password you set here, no confirmation email
+            needed. Deactivating keeps all of their past tickets and
+            equipment history exactly as-is, it just blocks them from
+            signing in or being assigned anything new.
+          </p>
+
+          <form id="add-employee-form" class="ticket-form">
+            <div class="form-row">
+              <label>Email
+                <input type="email" id="new-employee-email" required>
+              </label>
+              <label>Initial Password
+                <input type="text" id="new-employee-password" required minlength="6" placeholder="At least 6 characters">
+              </label>
+            </div>
+            <label class="checkbox-label"><input type="checkbox" id="new-employee-admin"> Make this person an admin</label>
+            <button type="submit">Add Employee</button>
+            <p id="add-employee-error" class="error"></p>
+          </form>
+
+          <h4>Active</h4>
+          <table class="equipment-types-table" id="employees-active-table">
+            <thead><tr><th>Email</th><th>Admin</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+
+          <details class="report-panel">
+            <summary>Inactive</summary>
+            <table class="equipment-types-table" id="employees-inactive-table">
+              <thead><tr><th>Email</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </details>
+        </div>
       </div>
     </section>
   </main>

@@ -405,6 +405,29 @@ h2 { font-size: 22px; margin: 0 0 16px; }
   font-size: 15px;
 }
 
+.manage-box-wide {
+  grid-column: 1 / -1;
+}
+
+.manage-box-wide h4 {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  color: var(--gray);
+  text-transform: uppercase;
+}
+
+/* .ticket-form's own label rule stacks a checkbox above its own text
+   (fine for a text/select field, awkward for a checkbox) - this
+   overrides just the row layout while keeping the rest of the form's
+   styling. */
+.ticket-form label.checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+  color: #1a1a1a;
+}
+
 .manage-box select {
   width: 100%;
   margin-bottom: 10px;
