@@ -69,7 +69,10 @@ let profileEmailById = new Map()
 // admin from "Manage Lists" (see supabase/triangle_it_support_schema.sql's
 // ticket_taxonomy table), loaded fresh on every login rather than
 // hardcoded, so a list change is visible to everyone immediately.
-let taxonomy = { companies: [], departments_by_company: {}, categories: [], offices: [] }
+let taxonomy = {
+  companies: [], departments_by_company: {}, categories: [], offices: [],
+  equipment_types: [],
+}
 
 async function loadTaxonomy() {
   const { data, error } = await supabase.from('ticket_taxonomy').select('*').eq('id', 1).single()
@@ -82,6 +85,7 @@ async function loadTaxonomy() {
     departments_by_company: data.departments_by_company || {},
     categories: data.categories || [],
     offices: data.offices || [],
+    equipment_types: data.equipment_types || [],
   }
 }
 
@@ -91,8 +95,26 @@ async function saveTaxonomy() {
     departments_by_company: taxonomy.departments_by_company,
     categories: taxonomy.categories,
     offices: taxonomy.offices,
+    equipment_types: taxonomy.equipment_types,
     updated_at: nowIso(),
   }).eq('id', 1)
+}
+
+// "Tracked" types (laptop, monitor...) get a Serial Number and live in
+// equipment_assets; untracked types (headphones, flash drives...) are
+// just logged as handed out in equipment_consumable_log - see the
+// equipment_types column comment in the schema file.
+function trackedEquipmentTypes() {
+  return taxonomy.equipment_types.filter((t) => t.tracked).map((t) => t.name)
+}
+
+function untrackedEquipmentTypes() {
+  return taxonomy.equipment_types.filter((t) => !t.tracked).map((t) => t.name)
+}
+
+function renewalYearsFor(typeName) {
+  const entry = taxonomy.equipment_types.find((t) => t.name === typeName)
+  return entry ? entry.renewal_years : null
 }
 
 function populatePlainSelect(selectEl, options) {
@@ -136,7 +158,27 @@ function refreshAllTaxonomyUI() {
   populateFilterSelect('report-category', taxonomy.categories, 'All Categories')
   refreshReportDepartmentOptions()
 
-  if (isAdmin) renderManageLists()
+  const allEquipmentTypes = taxonomy.equipment_types.map((t) => t.name)
+  populatePlainSelect(document.getElementById('request-equipment-type'), allEquipmentTypes)
+  populatePlainSelect(document.getElementById('new-asset-type'), trackedEquipmentTypes())
+  populatePlainSelect(document.getElementById('new-consumable-type'), untrackedEquipmentTypes())
+
+  if (isAdmin) {
+    renderManageLists()
+    populateProfileSelect(document.getElementById('new-consumable-employee'))
+  }
+}
+
+function populateProfileSelect(selectEl) {
+  const current = selectEl.value
+  selectEl.innerHTML = ''
+  ;[...profileEmailById.entries()].forEach(([id, email]) => {
+    const opt = document.createElement('option')
+    opt.value = id
+    opt.textContent = email
+    selectEl.appendChild(opt)
+  })
+  if ([...selectEl.options].some((o) => o.value === current)) selectEl.value = current
 }
 
 async function loadProfilesMap() {
@@ -291,6 +333,7 @@ logoutBtn.addEventListener('click', async () => {
   await supabase.auth.signOut()
   currentUserId = null
   isAdmin = false
+  teardownReminderRealtime()
   appScreen.classList.add('hidden')
   authScreen.classList.remove('hidden')
 })
@@ -312,18 +355,27 @@ async function enterApp() {
   adminTabBtn.classList.toggle('hidden', !isAdmin)
   dashboardTabBtn.classList.toggle('hidden', !isAdmin)
   manageTabBtn.classList.toggle('hidden', !isAdmin)
+  document.getElementById('equipment-admin-panel').classList.toggle('hidden', !isAdmin)
+  document.getElementById('notif-bell-wrap').classList.toggle('hidden', !isAdmin)
 
   authScreen.classList.add('hidden')
   appScreen.classList.remove('hidden')
+
+  if (isAdmin) await loadProfilesMap()
 
   await loadTaxonomy()
   refreshAllTaxonomyUI()
 
   loadMyTickets()
+  loadMyEquipment()
+
   if (isAdmin) {
-    await loadProfilesMap()
     loadAdminTickets()
     loadDashboard()
+    loadAssets()
+    loadConsumableLog()
+    loadReminders()
+    setupReminderRealtime()
   }
 }
 
@@ -413,7 +465,7 @@ async function loadMyTickets(reset = true) {
   mineHasMore = data.length === PAGE_SIZE
   minePage += 1
 
-  renderTicketList(document.getElementById('mine-list'), mineTickets, false)
+  renderTicketList(document.getElementById('mine-list'), mineTickets, false, false, null, true)
   document.getElementById('mine-load-more-btn').classList.toggle('hidden', !mineHasMore)
 }
 
@@ -620,9 +672,99 @@ async function loadAdminTickets(reset = true) {
 
 document.getElementById('admin-load-more-btn').addEventListener('click', () => loadAdminTickets(false))
 
+// ============================== Notification bell ================================
+// Admin-only. A ticket counts as a pending reminder while
+// reminder_requested_at is set and is newer than reminder_seen_at (or
+// reminder_seen_at is still empty) - the same "newer than" comparison
+// lets an employee remind again about a ticket the admin already saw
+// once, without needing a separate "acknowledged" flag to reset.
+
+const bellBtn = document.getElementById('notif-bell-btn')
+const notifDropdown = document.getElementById('notif-dropdown')
+const notifBadge = document.getElementById('notif-badge')
+const notifList = document.getElementById('notif-list')
+
+let reminderChannel = null
+
+async function loadReminders() {
+  if (!isAdmin) return
+
+  const { data, error } = await supabase
+    .from('tickets')
+    .select('*')
+    .not('reminder_requested_at', 'is', null)
+    .order('reminder_requested_at', { ascending: false })
+
+  if (error) {
+    console.error(error)
+    return
+  }
+
+  const pending = data.filter((t) =>
+    !t.reminder_seen_at || t.reminder_seen_at < t.reminder_requested_at
+  )
+
+  renderNotifDropdown(pending)
+}
+
+function renderNotifDropdown(pending) {
+  notifBadge.textContent = pending.length
+  notifBadge.classList.toggle('hidden', pending.length === 0)
+
+  notifList.innerHTML = ''
+  if (pending.length === 0) {
+    const li = document.createElement('li')
+    li.className = 'empty-hint'
+    li.textContent = 'No reminders.'
+    notifList.appendChild(li)
+    return
+  }
+
+  pending.forEach((ticket) => {
+    const li = document.createElement('li')
+    li.className = 'notif-item'
+    li.textContent = `${ticketRef(ticket)} — ${ticket.title}`
+    li.addEventListener('click', () => acknowledgeReminder(ticket))
+    notifList.appendChild(li)
+  })
+}
+
+async function acknowledgeReminder(ticket) {
+  notifDropdown.classList.add('hidden')
+  await supabase.from('tickets').update({ reminder_seen_at: nowIso() }).eq('id', ticket.id)
+  await openInAdminTab(ticket)
+  loadReminders()
+}
+
+bellBtn.addEventListener('click', (e) => {
+  e.stopPropagation()
+  notifDropdown.classList.toggle('hidden')
+})
+
+document.addEventListener('click', (e) => {
+  if (!notifDropdown.contains(e.target) && e.target !== bellBtn) {
+    notifDropdown.classList.add('hidden')
+  }
+})
+
+function setupReminderRealtime() {
+  if (reminderChannel) return
+  reminderChannel = supabase
+    .channel('tickets-reminders')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, () => loadReminders())
+    .subscribe()
+}
+
+function teardownReminderRealtime() {
+  if (reminderChannel) {
+    supabase.removeChannel(reminderChannel)
+    reminderChannel = null
+  }
+}
+
 // ============================== Rendering ================================
 
-function renderTicketList(listEl, tickets, adminMode, showRequester, onCardClick) {
+function renderTicketList(listEl, tickets, adminMode, showRequester, onCardClick, showRemindButton) {
   listEl.innerHTML = ''
 
   if (tickets.length === 0) {
@@ -682,6 +824,26 @@ function renderTicketList(listEl, tickets, adminMode, showRequester, onCardClick
       sol.className = 'ticket-solution'
       sol.textContent = 'Solution: ' + ticket.solution
       li.appendChild(sol)
+    }
+
+    if (showRemindButton && ticket.status !== 'Resolved') {
+      const remindBtn = document.createElement('button')
+      remindBtn.type = 'button'
+      remindBtn.className = 'remind-btn'
+      const alreadyPending = ticket.reminder_requested_at &&
+        (!ticket.reminder_seen_at || ticket.reminder_seen_at < ticket.reminder_requested_at)
+      remindBtn.textContent = alreadyPending ? '🔔 Reminded' : '🔔 Remind Admin'
+      remindBtn.disabled = !!alreadyPending
+      remindBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation()
+        remindBtn.disabled = true
+        remindBtn.textContent = 'Reminding...'
+        const { error } = await supabase.rpc('request_ticket_reminder', { ticket_id: ticket.id })
+        remindBtn.textContent = error ? '🔔 Remind Admin' : '🔔 Reminded'
+        remindBtn.disabled = !error
+        if (error) console.error(error)
+      })
+      li.appendChild(remindBtn)
     }
 
     if (adminMode) {
@@ -974,7 +1136,70 @@ function renderManageLists() {
 
   populatePlainSelect(manageDeptCompanySelect, taxonomy.companies)
   renderDepartmentChips()
+
+  renderEquipmentTypesTable()
 }
+
+function renderEquipmentTypesTable() {
+  const tbody = document.querySelector('#manage-equipment-types tbody')
+  tbody.innerHTML = ''
+
+  taxonomy.equipment_types.forEach((entry, index) => {
+    const tr = document.createElement('tr')
+
+    const nameTd = document.createElement('td')
+    nameTd.textContent = entry.name
+    tr.appendChild(nameTd)
+
+    const trackedTd = document.createElement('td')
+    trackedTd.textContent = entry.tracked ? 'Yes' : 'No'
+    tr.appendChild(trackedTd)
+
+    const yearsTd = document.createElement('td')
+    yearsTd.textContent = entry.tracked ? (entry.renewal_years ?? '—') : '—'
+    tr.appendChild(yearsTd)
+
+    const removeTd = document.createElement('td')
+    const removeBtn = document.createElement('button')
+    removeBtn.type = 'button'
+    removeBtn.textContent = '×'
+    removeBtn.title = 'Remove'
+    removeBtn.addEventListener('click', () => removeEquipmentType(index))
+    removeTd.appendChild(removeBtn)
+    tr.appendChild(removeTd)
+
+    tbody.appendChild(tr)
+  })
+}
+
+async function removeEquipmentType(index) {
+  taxonomy.equipment_types.splice(index, 1)
+  await saveTaxonomy()
+  refreshAllTaxonomyUI()
+}
+
+document.getElementById('add-equipment-type-form').addEventListener('submit', async (e) => {
+  e.preventDefault()
+
+  const nameInput = document.getElementById('new-equipment-type-name')
+  const trackedInput = document.getElementById('new-equipment-type-tracked')
+  const yearsInput = document.getElementById('new-equipment-type-years')
+
+  const name = nameInput.value.trim()
+  if (!name || taxonomy.equipment_types.some((t) => t.name === name)) return
+
+  const tracked = trackedInput.checked
+  const years = yearsInput.value ? Number(yearsInput.value) : null
+
+  taxonomy.equipment_types.push({ name, tracked, renewal_years: tracked ? years : null })
+
+  nameInput.value = ''
+  yearsInput.value = ''
+  trackedInput.checked = true
+
+  await saveTaxonomy()
+  refreshAllTaxonomyUI()
+})
 
 manageDeptCompanySelect.addEventListener('change', renderDepartmentChips)
 
@@ -1036,4 +1261,381 @@ document.getElementById('add-department-form').addEventListener('submit', async 
   input.value = ''
   await saveTaxonomy()
   refreshAllTaxonomyUI()
+})
+
+// ============================== Equipment ================================
+// Requesting equipment never auto-creates an equipment_assets row - an
+// admin fulfills a request by assigning an existing Unassigned asset
+// (or logging a consumable handout) from the panel below, keeping
+// equipment_assets the single source of truth for what physically
+// exists (see the schema file's comment on equipment_requests).
+
+function renewalDue(assignedAtStr, typeName) {
+  const years = renewalYearsFor(typeName)
+  if (!assignedAtStr || !years) return false
+  const dueDate = new Date(assignedAtStr)
+  dueDate.setFullYear(dueDate.getFullYear() + years)
+  return dueDate <= new Date()
+}
+
+function simpleCard(lines, extraClass) {
+  const li = document.createElement('li')
+  li.className = 'ticket-card' + (extraClass ? ' ' + extraClass : '')
+  lines.forEach((line, i) => {
+    const div = document.createElement('div')
+    div.className = i === 0 ? 'ticket-title' : 'ticket-meta'
+    div.textContent = line
+    li.appendChild(div)
+  })
+  return li
+}
+
+function renderEmptyList(listEl, text) {
+  listEl.innerHTML = ''
+  const li = document.createElement('li')
+  li.className = 'empty-hint'
+  li.textContent = text
+  listEl.appendChild(li)
+}
+
+// --- Employee: request form + "mine" lists ---
+
+document.getElementById('equipment-request-form').addEventListener('submit', async (e) => {
+  e.preventDefault()
+
+  const type = document.getElementById('request-equipment-type').value
+  const reason = document.getElementById('request-equipment-reason').value.trim()
+  if (!type) return
+
+  const { error } = await supabase.from('equipment_requests').insert({
+    type, reason, status: 'Pending', created_at: nowIso(), updated_at: nowIso(),
+  })
+
+  if (error) {
+    alert('Could not send request: ' + error.message)
+    return
+  }
+
+  e.target.reset()
+  loadMyEquipment()
+})
+
+async function loadMyEquipment() {
+  const [{ data: requests }, { data: assets }, { data: consumables }] = await Promise.all([
+    supabase.from('equipment_requests').select('*').eq('requested_by', currentUserId).order('created_at', { ascending: false }),
+    supabase.from('equipment_assets').select('*').eq('assigned_to', currentUserId).order('assigned_at', { ascending: false }),
+    supabase.from('equipment_consumable_log').select('*').eq('given_to', currentUserId).order('given_at', { ascending: false }),
+  ])
+
+  const requestsList = document.getElementById('my-requests-list')
+  requestsList.innerHTML = ''
+  if (!requests || requests.length === 0) {
+    renderEmptyList(requestsList, 'No requests yet.')
+  } else {
+    requests.forEach((r) => {
+      requestsList.appendChild(simpleCard([
+        `${r.type} — ${r.status}`,
+        [formatDateTime(r.created_at), r.reason].filter(Boolean).join(' · '),
+      ]))
+    })
+  }
+
+  const assetsList = document.getElementById('my-assets-list')
+  assetsList.innerHTML = ''
+  if (!assets || assets.length === 0) {
+    renderEmptyList(assetsList, 'No equipment assigned to you.')
+  } else {
+    assets.forEach((a) => {
+      const due = renewalDue(a.assigned_at, a.type)
+      assetsList.appendChild(simpleCard([
+        `${a.type}${a.model ? ' — ' + a.model : ''}${due ? ' (renewal due)' : ''}`,
+        [a.serial_number ? 'S/N ' + a.serial_number : null, a.assigned_at ? 'Since ' + a.assigned_at : null].filter(Boolean).join(' · '),
+      ], due ? 'ticket-highlight' : ''))
+    })
+  }
+
+  const consumablesList = document.getElementById('my-consumables-list')
+  consumablesList.innerHTML = ''
+  if (!consumables || consumables.length === 0) {
+    renderEmptyList(consumablesList, 'None received yet.')
+  } else {
+    consumables.forEach((c) => {
+      consumablesList.appendChild(simpleCard([
+        `${c.type} × ${c.quantity}`,
+        c.given_at,
+      ]))
+    })
+  }
+}
+
+// --- Admin: requests ---
+
+let assetsCache = []
+
+async function loadAllRequests() {
+  const { data, error } = await supabase
+    .from('equipment_requests')
+    .select('*')
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    console.error(error)
+    return
+  }
+
+  const sorted = [...data].sort((a, b) => (a.status === 'Pending' ? -1 : 0) - (b.status === 'Pending' ? -1 : 0))
+  renderRequestsList(sorted)
+}
+
+function renderRequestsList(requests) {
+  const listEl = document.getElementById('admin-requests-list')
+  listEl.innerHTML = ''
+
+  if (requests.length === 0) {
+    renderEmptyList(listEl, 'No requests yet.')
+    return
+  }
+
+  requests.forEach((r) => {
+    const li = document.createElement('li')
+    li.className = 'ticket-card'
+
+    const title = document.createElement('div')
+    title.className = 'ticket-title'
+    title.textContent = `${r.type} — ${r.status}`
+    li.appendChild(title)
+
+    const meta = document.createElement('div')
+    meta.className = 'ticket-meta'
+    meta.textContent = [
+      formatDateTime(r.created_at),
+      profileEmailById.get(r.requested_by) || 'Unknown',
+      r.reason,
+    ].filter(Boolean).join(' · ')
+    li.appendChild(meta)
+
+    if (r.status === 'Pending') {
+      const controls = document.createElement('div')
+      controls.className = 'admin-controls'
+
+      const availableAssets = assetsCache.filter((a) => a.type === r.type && a.status === 'Unassigned')
+      const assetSelect = document.createElement('select')
+      if (availableAssets.length === 0) {
+        const opt = document.createElement('option')
+        opt.textContent = 'No unassigned ' + r.type + ' available'
+        opt.disabled = true
+        assetSelect.appendChild(opt)
+      } else {
+        availableAssets.forEach((a) => {
+          const opt = document.createElement('option')
+          opt.value = a.id
+          opt.textContent = `${a.model || a.type}${a.serial_number ? ' (S/N ' + a.serial_number + ')' : ''}`
+          assetSelect.appendChild(opt)
+        })
+      }
+
+      const fulfillBtn = document.createElement('button')
+      fulfillBtn.textContent = 'Fulfill'
+      fulfillBtn.disabled = availableAssets.length === 0
+      fulfillBtn.addEventListener('click', () => fulfillRequest(r, assetSelect.value))
+
+      const declineBtn = document.createElement('button')
+      declineBtn.textContent = 'Decline'
+      declineBtn.addEventListener('click', () => declineRequest(r))
+
+      controls.append(assetSelect, fulfillBtn, declineBtn)
+      li.appendChild(controls)
+    }
+
+    listEl.appendChild(li)
+  })
+}
+
+async function fulfillRequest(request, assetId) {
+  if (!assetId) return
+
+  const { error: assetError } = await supabase.from('equipment_assets').update({
+    status: 'Assigned', assigned_to: request.requested_by, assigned_at: new Date().toISOString().slice(0, 10),
+    updated_at: nowIso(),
+  }).eq('id', assetId)
+
+  if (assetError) {
+    alert('Could not assign asset: ' + assetError.message)
+    return
+  }
+
+  await supabase.from('equipment_requests').update({
+    status: 'Fulfilled', fulfilled_asset_id: assetId, updated_at: nowIso(),
+  }).eq('id', request.id)
+
+  loadAssets() // also refreshes the requests list (see loadAssets())
+}
+
+async function declineRequest(request) {
+  await supabase.from('equipment_requests').update({ status: 'Declined', updated_at: nowIso() }).eq('id', request.id)
+  loadAllRequests()
+}
+
+// --- Admin: IT Assets inventory ---
+
+async function loadAssets() {
+  const { data, error } = await supabase.from('equipment_assets').select('*').order('created_at', { ascending: false })
+  if (error) {
+    console.error(error)
+    return
+  }
+  assetsCache = data
+  renderAssetsList(data)
+  loadAllRequests()
+}
+
+function renderAssetsList(assets) {
+  const listEl = document.getElementById('admin-assets-list')
+  listEl.innerHTML = ''
+
+  if (assets.length === 0) {
+    renderEmptyList(listEl, 'No assets yet.')
+    return
+  }
+
+  assets.forEach((a) => {
+    const due = renewalDue(a.assigned_at, a.type)
+    const li = document.createElement('li')
+    li.className = 'ticket-card' + (due ? ' ticket-highlight' : '')
+
+    const title = document.createElement('div')
+    title.className = 'ticket-title'
+    title.textContent = `${a.type}${a.model ? ' — ' + a.model : ''} (${a.status}${due ? ', renewal due' : ''})`
+    li.appendChild(title)
+
+    const meta = document.createElement('div')
+    meta.className = 'ticket-meta'
+    meta.textContent = [
+      a.serial_number ? 'S/N ' + a.serial_number : null,
+      a.assigned_to ? (profileEmailById.get(a.assigned_to) || 'Unknown') : null,
+      a.assigned_at,
+    ].filter(Boolean).join(' · ')
+    li.appendChild(meta)
+
+    const controls = document.createElement('div')
+    controls.className = 'admin-controls'
+
+    if (a.status !== 'Retired') {
+      if (a.status === 'Unassigned') {
+        const assignSelect = document.createElement('select')
+        populateProfileSelect(assignSelect)
+        const assignBtn = document.createElement('button')
+        assignBtn.textContent = 'Assign'
+        assignBtn.addEventListener('click', () => assignAsset(a.id, assignSelect.value))
+        controls.append(assignSelect, assignBtn)
+      } else {
+        const unassignBtn = document.createElement('button')
+        unassignBtn.textContent = 'Unassign'
+        unassignBtn.addEventListener('click', () => unassignAsset(a.id))
+        controls.append(unassignBtn)
+      }
+
+      const retireBtn = document.createElement('button')
+      retireBtn.textContent = 'Retire'
+      retireBtn.addEventListener('click', () => retireAsset(a.id))
+      controls.append(retireBtn)
+    }
+
+    li.appendChild(controls)
+    listEl.appendChild(li)
+  })
+}
+
+async function assignAsset(assetId, profileId) {
+  if (!profileId) return
+  await supabase.from('equipment_assets').update({
+    status: 'Assigned', assigned_to: profileId, assigned_at: new Date().toISOString().slice(0, 10), updated_at: nowIso(),
+  }).eq('id', assetId)
+  loadAssets()
+}
+
+async function unassignAsset(assetId) {
+  await supabase.from('equipment_assets').update({
+    status: 'Unassigned', assigned_to: null, assigned_at: null, updated_at: nowIso(),
+  }).eq('id', assetId)
+  loadAssets()
+}
+
+async function retireAsset(assetId) {
+  await supabase.from('equipment_assets').update({ status: 'Retired', updated_at: nowIso() }).eq('id', assetId)
+  loadAssets()
+}
+
+document.getElementById('add-asset-form').addEventListener('submit', async (e) => {
+  e.preventDefault()
+
+  const type = document.getElementById('new-asset-type').value
+  const model = document.getElementById('new-asset-model').value.trim()
+  const serial = document.getElementById('new-asset-serial').value.trim()
+  if (!type) return
+
+  const { error } = await supabase.from('equipment_assets').insert({
+    type, model, serial_number: serial, status: 'Unassigned', created_at: nowIso(), updated_at: nowIso(),
+  })
+
+  if (error) {
+    alert('Could not add asset: ' + error.message)
+    return
+  }
+
+  e.target.reset()
+  loadAssets()
+})
+
+// --- Admin: Consumables log ---
+
+async function loadConsumableLog() {
+  const { data, error } = await supabase
+    .from('equipment_consumable_log')
+    .select('*')
+    .order('given_at', { ascending: false })
+    .limit(200)
+
+  if (error) {
+    console.error(error)
+    return
+  }
+
+  const listEl = document.getElementById('admin-consumables-list')
+  listEl.innerHTML = ''
+
+  if (data.length === 0) {
+    renderEmptyList(listEl, 'None logged yet.')
+    return
+  }
+
+  data.forEach((c) => {
+    listEl.appendChild(simpleCard([
+      `${c.type} × ${c.quantity} — ${profileEmailById.get(c.given_to) || 'Unknown'}`,
+      [c.given_at, c.notes].filter(Boolean).join(' · '),
+    ]))
+  })
+}
+
+document.getElementById('add-consumable-form').addEventListener('submit', async (e) => {
+  e.preventDefault()
+
+  const type = document.getElementById('new-consumable-type').value
+  const givenTo = document.getElementById('new-consumable-employee').value
+  const quantity = Number(document.getElementById('new-consumable-qty').value) || 1
+  const notes = document.getElementById('new-consumable-notes').value.trim()
+  if (!type || !givenTo) return
+
+  const { error } = await supabase.from('equipment_consumable_log').insert({
+    type, given_to: givenTo, quantity, notes, given_at: new Date().toISOString().slice(0, 10), created_at: nowIso(),
+  })
+
+  if (error) {
+    alert('Could not log handout: ' + error.message)
+    return
+  }
+
+  e.target.reset()
+  document.getElementById('new-consumable-qty').value = 1
+  loadConsumableLog()
 })

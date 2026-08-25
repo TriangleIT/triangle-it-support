@@ -58,12 +58,22 @@
   <header>
     <h1 class="logo small">TRIANGLE<span>IT SUPPORT</span></h1>
     <span id="user-identity" class="user-identity"></span>
+    <div id="notif-bell-wrap" class="notif-bell-wrap hidden">
+      <button id="notif-bell-btn" class="bell-btn" type="button">
+        🔔<span id="notif-badge" class="notif-badge hidden">0</span>
+      </button>
+      <div id="notif-dropdown" class="notif-dropdown hidden">
+        <div class="notif-dropdown-title">Reminders</div>
+        <ul id="notif-list" class="notif-list"></ul>
+      </div>
+    </div>
     <button id="logout-btn">Log out</button>
   </header>
 
   <nav id="tabs">
     <button class="tab-btn active" data-tab="submit">Submit Ticket</button>
     <button class="tab-btn" data-tab="mine">My Tickets</button>
+    <button class="tab-btn" data-tab="equipment">Equipment</button>
     <button class="tab-btn hidden" id="dashboard-tab-btn" data-tab="dashboard">Dashboard</button>
     <button class="tab-btn hidden" id="admin-tab-btn" data-tab="admin">All Tickets (Admin)</button>
     <button class="tab-btn hidden" id="manage-tab-btn" data-tab="manage">Manage Lists</button>
@@ -105,6 +115,83 @@
       <h2>My Tickets</h2>
       <ul id="mine-list" class="ticket-list"></ul>
       <button type="button" id="mine-load-more-btn" class="load-more-btn hidden">Load more</button>
+    </section>
+
+    <!-- Equipment -->
+    <section id="tab-equipment" class="tab-panel">
+      <h2>Equipment</h2>
+
+      <h3>Request Equipment</h3>
+      <form id="equipment-request-form" class="ticket-form">
+        <label>Type
+          <select id="request-equipment-type"></select>
+        </label>
+        <label>Reason
+          <textarea id="request-equipment-reason" rows="3" placeholder="What's it for?"></textarea>
+        </label>
+        <button type="submit">Send Request</button>
+      </form>
+
+      <h3>My Requests</h3>
+      <ul id="my-requests-list" class="ticket-list"></ul>
+
+      <h3>My Assigned Equipment</h3>
+      <ul id="my-assets-list" class="ticket-list"></ul>
+
+      <h3>My Consumables Received</h3>
+      <ul id="my-consumables-list" class="ticket-list"></ul>
+
+      <div id="equipment-admin-panel" class="hidden">
+        <h3>Admin — Equipment Management</h3>
+
+        <details class="report-panel" open>
+          <summary>Equipment Requests</summary>
+          <ul id="admin-requests-list" class="ticket-list"></ul>
+        </details>
+
+        <details class="report-panel">
+          <summary>IT Assets (tracked, individually assigned)</summary>
+          <form id="add-asset-form" class="ticket-form">
+            <div class="form-row">
+              <label>Type
+                <select id="new-asset-type"></select>
+              </label>
+              <label>Model
+                <input type="text" id="new-asset-model" placeholder="e.g. Dell Latitude 5440">
+              </label>
+            </div>
+            <label>Serial Number
+              <input type="text" id="new-asset-serial">
+            </label>
+            <button type="submit">Add Asset</button>
+          </form>
+          <ul id="admin-assets-list" class="ticket-list"></ul>
+        </details>
+
+        <details class="report-panel">
+          <summary>Consumables Log (not individually tracked)</summary>
+          <form id="add-consumable-form" class="ticket-form">
+            <div class="form-row">
+              <label>Type
+                <select id="new-consumable-type"></select>
+              </label>
+              <label>Given To
+                <select id="new-consumable-employee"></select>
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Quantity
+                <input type="number" id="new-consumable-qty" value="1" min="1">
+              </label>
+              <label>Notes
+                <input type="text" id="new-consumable-notes">
+              </label>
+            </div>
+            <button type="submit">Log Handout</button>
+          </form>
+          <ul id="admin-consumables-list" class="ticket-list"></ul>
+        </details>
+      </div>
     </section>
 
     <!-- Admin dashboard -->
@@ -218,6 +305,27 @@
           <div class="chip-list" id="manage-departments"></div>
           <form class="add-row" id="add-department-form">
             <input type="text" placeholder="New department...">
+            <button type="submit">Add</button>
+          </form>
+        </div>
+
+        <div class="manage-box">
+          <h3>Equipment Types</h3>
+          <p class="hint-text" style="margin-bottom:10px;">
+            "Tracked" types (laptop, monitor...) get individual Serial
+            Numbers and a renewal reminder. Untracked types (headphones,
+            flash drives...) are just logged as handed out, no reminder.
+          </p>
+          <table class="equipment-types-table" id="manage-equipment-types">
+            <thead>
+              <tr><th>Name</th><th>Tracked</th><th>Renewal (yrs)</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <form class="add-row equipment-type-add-row" id="add-equipment-type-form">
+            <input type="text" placeholder="New type..." id="new-equipment-type-name">
+            <label><input type="checkbox" id="new-equipment-type-tracked" checked> Tracked</label>
+            <input type="number" id="new-equipment-type-years" placeholder="Years" min="0" style="width:70px;">
             <button type="submit">Add</button>
           </form>
         </div>

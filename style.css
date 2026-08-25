@@ -166,6 +166,74 @@ header {
   cursor: pointer;
 }
 
+.notif-bell-wrap {
+  position: relative;
+  margin-right: 12px;
+}
+
+.bell-btn {
+  position: relative;
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.notif-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  background: #ff5c5c;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  min-width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+}
+
+.notif-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  max-height: 340px;
+  overflow-y: auto;
+  background: var(--card);
+  color: #1a1a1a;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+}
+
+.notif-dropdown-title {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 12px 14px 6px;
+}
+
+.notif-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 8px;
+}
+
+.notif-item {
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+}
+
+.notif-item:hover {
+  background: #f4f4f4;
+}
+
 #tabs {
   display: flex;
   background: #111;
@@ -449,6 +517,19 @@ h2 { font-size: 22px; margin: 0 0 16px; }
   margin-top: 10px;
 }
 
+/* The Equipment tab nests add-asset/add-consumable forms inside a
+   report-panel (same collapsible-box pattern as Export Report) -
+   .ticket-form's own card background/border/padding would otherwise
+   double up with the report-panel's, so neutralize it in this context
+   and just keep its input/select/textarea/button styling. */
+.report-panel .ticket-form {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+
 #export-report-btn {
   margin-top: 12px;
   padding: 10px 16px;
@@ -571,6 +652,71 @@ h2 { font-size: 22px; margin: 0 0 16px; }
   font-weight: 700;
   font-size: 13px;
   cursor: pointer;
+}
+
+.remind-btn {
+  margin-top: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: #1a1a1a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.remind-btn:disabled {
+  color: var(--gray);
+  cursor: default;
+}
+
+.equipment-types-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.equipment-types-table th,
+.equipment-types-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.equipment-types-table button {
+  border: none;
+  background: none;
+  color: var(--gray);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.equipment-types-table button:hover {
+  color: #ff5c5c;
+}
+
+.equipment-type-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.equipment-type-add-row input[type="text"] {
+  flex: 1;
+  min-width: 100px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.equipment-type-add-row input[type="number"] {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 .load-more-btn {
