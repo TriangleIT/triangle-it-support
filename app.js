@@ -356,7 +356,7 @@ async function enterApp() {
   adminTabBtn.classList.toggle('hidden', !isAdmin)
   dashboardTabBtn.classList.toggle('hidden', !isAdmin)
   manageTabBtn.classList.toggle('hidden', !isAdmin)
-  document.getElementById('equipment-admin-panel').classList.toggle('hidden', !isAdmin)
+  document.getElementById('equipment-admin-subtab-btn').classList.toggle('hidden', !isAdmin)
   document.getElementById('notif-bell-wrap').classList.toggle('hidden', !isAdmin)
 
   authScreen.classList.add('hidden')
@@ -392,6 +392,18 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'))
     btn.classList.add('active')
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active')
+  })
+})
+
+// Nested tabs inside the Equipment tab (My Equipment vs. Admin
+// Management) - same active/hidden toggling as the top-level tabs,
+// just scoped to .sub-tab-btn/.sub-tab-panel instead.
+document.querySelectorAll('.sub-tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sub-tab-btn').forEach((b) => b.classList.remove('active'))
+    document.querySelectorAll('.sub-tab-panel').forEach((p) => p.classList.remove('active'))
+    btn.classList.add('active')
+    document.getElementById('equipment-subtab-' + btn.dataset.subtab).classList.add('active')
   })
 })
 
@@ -1353,7 +1365,11 @@ async function renderEquipmentHistoryFor(profileId, listIds) {
       const due = renewalDue(a.assigned_at, a.type)
       assetsList.appendChild(simpleCard([
         `${a.type}${a.model ? ' — ' + a.model : ''}${due ? ' (renewal due)' : ''}`,
-        [a.serial_number ? 'S/N ' + a.serial_number : null, a.assigned_at ? 'Since ' + a.assigned_at : null].filter(Boolean).join(' · '),
+        [
+          a.serial_number ? 'S/N ' + a.serial_number : null,
+          a.assigned_at ? 'Since ' + a.assigned_at : null,
+          a.warranty_until ? 'Warranty until ' + a.warranty_until : null,
+        ].filter(Boolean).join(' · '),
       ], due ? 'ticket-highlight' : ''))
     })
   }
@@ -1579,6 +1595,7 @@ function renderAssetsList(assets) {
 
   assets.forEach((a) => {
     const due = renewalDue(a.assigned_at, a.type)
+    const warrantyExpired = a.warranty_until && a.warranty_until < new Date().toISOString().slice(0, 10)
     const li = document.createElement('li')
     li.className = 'ticket-card' + (due ? ' ticket-highlight' : '')
 
@@ -1593,6 +1610,7 @@ function renderAssetsList(assets) {
       a.serial_number ? 'S/N ' + a.serial_number : null,
       a.assigned_to ? (profileEmailById.get(a.assigned_to) || 'Unknown') : null,
       a.assigned_at,
+      a.warranty_until ? `Warranty until ${a.warranty_until}${warrantyExpired ? ' (expired)' : ''}` : null,
     ].filter(Boolean).join(' · ')
     li.appendChild(meta)
 
@@ -1608,10 +1626,14 @@ function renderAssetsList(assets) {
         assignBtn.addEventListener('click', () => assignAsset(a.id, assignSelect.value))
         controls.append(assignSelect, assignBtn)
       } else {
-        const unassignBtn = document.createElement('button')
-        unassignBtn.textContent = 'Unassign'
-        unassignBtn.addEventListener('click', () => unassignAsset(a.id))
-        controls.append(unassignBtn)
+        // "Take Back" and "Retire" sit side by side here on purpose -
+        // taking an assigned item back from an employee can go either
+        // way: back into the Unassigned pool for reassignment, or
+        // straight to Retired if it's not going to anyone else.
+        const takeBackBtn = document.createElement('button')
+        takeBackBtn.textContent = 'Take Back'
+        takeBackBtn.addEventListener('click', () => unassignAsset(a.id))
+        controls.append(takeBackBtn)
       }
 
       const retireBtn = document.createElement('button')
@@ -1651,10 +1673,12 @@ document.getElementById('add-asset-form').addEventListener('submit', async (e) =
   const type = document.getElementById('new-asset-type').value
   const model = document.getElementById('new-asset-model').value.trim()
   const serial = document.getElementById('new-asset-serial').value.trim()
+  const warranty = document.getElementById('new-asset-warranty').value || null
   if (!type) return
 
   const { error } = await supabase.from('equipment_assets').insert({
-    type, model, serial_number: serial, status: 'Unassigned', created_at: nowIso(), updated_at: nowIso(),
+    type, model, serial_number: serial, warranty_until: warranty, status: 'Unassigned',
+    created_at: nowIso(), updated_at: nowIso(),
   })
 
   if (error) {
@@ -1771,16 +1795,17 @@ document.getElementById('export-equipment-report-btn').addEventListener('click',
   XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary')
 
   // ---- Assets sheet ----
-  const assetHeader = ['Type', 'Model', 'Serial Number', 'Status', 'Assigned To', 'Assigned Date', 'Renewal Due', 'Notes']
+  const assetHeader = ['Type', 'Model', 'Serial Number', 'Status', 'Assigned To', 'Assigned Date', 'Renewal Due', 'Warranty Until', 'Notes']
   const assetRows = assets.map((a) => [
     a.type, a.model || '', a.serial_number || '', a.status,
     a.assigned_to ? (emailById.get(a.assigned_to) || 'Unknown') : '',
     a.assigned_at || '',
     a.status === 'Assigned' && renewalDue(a.assigned_at, a.type) ? 'Yes' : '',
+    a.warranty_until || '',
     a.notes || '',
   ])
   const assetSheet = XLSX.utils.aoa_to_sheet([assetHeader, ...assetRows])
-  assetSheet['!cols'] = [{ wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 30 }]
+  assetSheet['!cols'] = [{ wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 30 }]
   assetSheet['!freeze'] = { xSplit: 0, ySplit: 1 }
   assetHeader.forEach((_, col) => styleCell(assetSheet, 0, col, { font: HEADER_FONT, fill: { patternType: 'solid', ...HEADER_FILL } }))
   XLSX.utils.book_append_sheet(wb, assetSheet, 'Assets')

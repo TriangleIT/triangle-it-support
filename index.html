@@ -121,29 +121,34 @@
     <section id="tab-equipment" class="tab-panel">
       <h2>Equipment</h2>
 
-      <h3>Request Equipment</h3>
-      <form id="equipment-request-form" class="ticket-form">
-        <label>Type
-          <select id="request-equipment-type"></select>
-        </label>
-        <label>Reason
-          <textarea id="request-equipment-reason" rows="3" placeholder="What's it for?"></textarea>
-        </label>
-        <button type="submit">Send Request</button>
-      </form>
+      <div class="sub-tabs">
+        <button class="sub-tab-btn active" data-subtab="mine">My Equipment</button>
+        <button class="sub-tab-btn hidden" id="equipment-admin-subtab-btn" data-subtab="admin">Admin Management</button>
+      </div>
 
-      <h3>My Requests</h3>
-      <ul id="my-requests-list" class="ticket-list"></ul>
+      <div id="equipment-subtab-mine" class="sub-tab-panel active">
+        <h3>Request Equipment</h3>
+        <form id="equipment-request-form" class="ticket-form">
+          <label>Type
+            <select id="request-equipment-type"></select>
+          </label>
+          <label>Reason
+            <textarea id="request-equipment-reason" rows="3" placeholder="What's it for?"></textarea>
+          </label>
+          <button type="submit">Send Request</button>
+        </form>
 
-      <h3>My Assigned Equipment</h3>
-      <ul id="my-assets-list" class="ticket-list"></ul>
+        <h3>My Requests</h3>
+        <ul id="my-requests-list" class="ticket-list"></ul>
 
-      <h3>My Consumables Received</h3>
-      <ul id="my-consumables-list" class="ticket-list"></ul>
+        <h3>My Assigned Equipment</h3>
+        <ul id="my-assets-list" class="ticket-list"></ul>
 
-      <div id="equipment-admin-panel" class="hidden">
-        <h3>Admin — Equipment Management</h3>
+        <h3>My Consumables Received</h3>
+        <ul id="my-consumables-list" class="ticket-list"></ul>
+      </div>
 
+      <div id="equipment-subtab-admin" class="sub-tab-panel">
         <button type="button" id="export-equipment-report-btn">Export Equipment Report (.xlsx)</button>
 
         <div class="dashboard-columns">
@@ -200,9 +205,14 @@
                 <input type="text" id="new-asset-model" placeholder="e.g. Dell Latitude 5440">
               </label>
             </div>
-            <label>Serial Number
-              <input type="text" id="new-asset-serial">
-            </label>
+            <div class="form-row">
+              <label>Serial Number
+                <input type="text" id="new-asset-serial">
+              </label>
+              <label>Warranty Until (if any)
+                <input type="date" id="new-asset-warranty">
+              </label>
+            </div>
             <button type="submit">Add Asset</button>
           </form>
           <ul id="admin-assets-list" class="ticket-list"></ul>
