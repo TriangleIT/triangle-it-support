@@ -166,6 +166,7 @@ function refreshAllTaxonomyUI() {
   if (isAdmin) {
     renderManageLists()
     populateProfileSelect(document.getElementById('new-consumable-employee'))
+    populateLookupEmployeeSelect()
   }
 }
 
@@ -1320,14 +1321,17 @@ document.getElementById('equipment-request-form').addEventListener('submit', asy
   loadMyEquipment()
 })
 
-async function loadMyEquipment() {
+// Shared by "My ..." (the logged-in employee's own history) and the
+// admin's "Look Up an Employee's Equipment" lookup below - same three
+// lists, just scoped to whichever profileId is passed in.
+async function renderEquipmentHistoryFor(profileId, listIds) {
   const [{ data: requests }, { data: assets }, { data: consumables }] = await Promise.all([
-    supabase.from('equipment_requests').select('*').eq('requested_by', currentUserId).order('created_at', { ascending: false }),
-    supabase.from('equipment_assets').select('*').eq('assigned_to', currentUserId).order('assigned_at', { ascending: false }),
-    supabase.from('equipment_consumable_log').select('*').eq('given_to', currentUserId).order('given_at', { ascending: false }),
+    supabase.from('equipment_requests').select('*').eq('requested_by', profileId).order('created_at', { ascending: false }),
+    supabase.from('equipment_assets').select('*').eq('assigned_to', profileId).order('assigned_at', { ascending: false }),
+    supabase.from('equipment_consumable_log').select('*').eq('given_to', profileId).order('given_at', { ascending: false }),
   ])
 
-  const requestsList = document.getElementById('my-requests-list')
+  const requestsList = document.getElementById(listIds.requests)
   requestsList.innerHTML = ''
   if (!requests || requests.length === 0) {
     renderEmptyList(requestsList, 'No requests yet.')
@@ -1340,10 +1344,10 @@ async function loadMyEquipment() {
     })
   }
 
-  const assetsList = document.getElementById('my-assets-list')
+  const assetsList = document.getElementById(listIds.assets)
   assetsList.innerHTML = ''
   if (!assets || assets.length === 0) {
-    renderEmptyList(assetsList, 'No equipment assigned to you.')
+    renderEmptyList(assetsList, 'No equipment assigned.')
   } else {
     assets.forEach((a) => {
       const due = renewalDue(a.assigned_at, a.type)
@@ -1354,7 +1358,7 @@ async function loadMyEquipment() {
     })
   }
 
-  const consumablesList = document.getElementById('my-consumables-list')
+  const consumablesList = document.getElementById(listIds.consumables)
   consumablesList.innerHTML = ''
   if (!consumables || consumables.length === 0) {
     renderEmptyList(consumablesList, 'None received yet.')
@@ -1366,6 +1370,76 @@ async function loadMyEquipment() {
       ]))
     })
   }
+}
+
+const MY_EQUIPMENT_LIST_IDS = { requests: 'my-requests-list', assets: 'my-assets-list', consumables: 'my-consumables-list' }
+
+async function loadMyEquipment() {
+  await renderEquipmentHistoryFor(currentUserId, MY_EQUIPMENT_LIST_IDS)
+}
+
+// --- Admin: look up an employee's equipment ---
+
+const LOOKUP_LIST_IDS = { requests: 'lookup-requests-list', assets: 'lookup-assets-list', consumables: 'lookup-consumables-list' }
+
+function populateLookupEmployeeSelect() {
+  const selectEl = document.getElementById('lookup-employee-select')
+  const current = selectEl.value
+  selectEl.innerHTML = '<option value="">Select an employee...</option>'
+  ;[...profileEmailById.entries()].forEach(([id, email]) => {
+    const opt = document.createElement('option')
+    opt.value = id
+    opt.textContent = email
+    selectEl.appendChild(opt)
+  })
+  if ([...selectEl.options].some((o) => o.value === current)) selectEl.value = current
+}
+
+document.getElementById('lookup-employee-select').addEventListener('change', (e) => {
+  const profileId = e.target.value
+  if (!profileId) {
+    ;['lookup-requests-list', 'lookup-assets-list', 'lookup-consumables-list'].forEach((id) => {
+      renderEmptyList(document.getElementById(id), 'Select an employee above.')
+    })
+    return
+  }
+  renderEquipmentHistoryFor(profileId, LOOKUP_LIST_IDS)
+})
+
+// --- Admin: equipment overview stats ---
+
+async function loadEquipmentOverview() {
+  const unassigned = assetsCache.filter((a) => a.status === 'Unassigned').length
+  const assignedAssets = assetsCache.filter((a) => a.status === 'Assigned')
+  const retired = assetsCache.filter((a) => a.status === 'Retired').length
+  const due = assignedAssets.filter((a) => renewalDue(a.assigned_at, a.type)).length
+
+  document.getElementById('eq-stat-total').textContent = assetsCache.length
+  document.getElementById('eq-stat-unassigned').textContent = unassigned
+  document.getElementById('eq-stat-assigned').textContent = assignedAssets.length
+  document.getElementById('eq-stat-retired').textContent = retired
+  document.getElementById('eq-stat-due').textContent = due
+
+  const [{ count: consumablesCount }, { count: pendingCount }] = await Promise.all([
+    supabase.from('equipment_consumable_log').select('*', { count: 'exact', head: true }),
+    supabase.from('equipment_requests').select('*', { count: 'exact', head: true }).eq('status', 'Pending'),
+  ])
+
+  const breakdown = document.getElementById('equipment-breakdown')
+  breakdown.innerHTML = ''
+
+  function line(label, counts) {
+    const p = document.createElement('div')
+    const strong = document.createElement('strong')
+    strong.textContent = label + ': '
+    p.appendChild(strong)
+    p.append(counts.length ? counts.map(([k, v]) => `${k}: ${v}`).join('   ') : '(none)')
+    breakdown.appendChild(p)
+  }
+
+  line('By Type', countBy(assetsCache, (a) => a.type))
+  line('Consumables logged (total)', [['Count', consumablesCount || 0]])
+  line('Pending requests', [['Count', pendingCount || 0]])
 }
 
 // --- Admin: requests ---
@@ -1385,6 +1459,11 @@ async function loadAllRequests() {
 
   const sorted = [...data].sort((a, b) => (a.status === 'Pending' ? -1 : 0) - (b.status === 'Pending' ? -1 : 0))
   renderRequestsList(sorted)
+
+  // Runs after assetsCache is already fresh, whether this call came
+  // from loadAssets()'s tail or directly (e.g. declineRequest()) - see
+  // loadEquipmentOverview()'s use of assetsCache.
+  loadEquipmentOverview()
 }
 
 function renderRequestsList(requests) {

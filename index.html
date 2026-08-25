@@ -146,6 +146,44 @@
 
         <button type="button" id="export-equipment-report-btn">Export Equipment Report (.xlsx)</button>
 
+        <div class="dashboard-columns">
+          <div class="stat-tile stat-tile-info">
+            <div class="stat-label">Total Assets</div>
+            <div class="stat-value" id="eq-stat-total">–</div>
+          </div>
+          <div class="stat-tile stat-tile-warning">
+            <div class="stat-label">Unassigned</div>
+            <div class="stat-value" id="eq-stat-unassigned">–</div>
+          </div>
+          <div class="stat-tile stat-tile-good">
+            <div class="stat-label">Assigned</div>
+            <div class="stat-value" id="eq-stat-assigned">–</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">Retired</div>
+            <div class="stat-value" id="eq-stat-retired">–</div>
+          </div>
+          <div class="stat-tile stat-tile-warning">
+            <div class="stat-label">Renewal Due</div>
+            <div class="stat-value" id="eq-stat-due">–</div>
+          </div>
+        </div>
+        <div id="equipment-breakdown" class="breakdown-box"></div>
+
+        <h3>Look Up an Employee's Equipment</h3>
+        <div class="filter-row">
+          <select id="lookup-employee-select"><option value="">Select an employee...</option></select>
+        </div>
+
+        <p class="hint-text" style="margin-top:14px;">Assigned Equipment</p>
+        <ul id="lookup-assets-list" class="ticket-list"></ul>
+
+        <p class="hint-text" style="margin-top:14px;">Consumables Received</p>
+        <ul id="lookup-consumables-list" class="ticket-list"></ul>
+
+        <p class="hint-text" style="margin-top:14px;">Requests</p>
+        <ul id="lookup-requests-list" class="ticket-list"></ul>
+
         <details class="report-panel" open>
           <summary>Equipment Requests</summary>
           <ul id="admin-requests-list" class="ticket-list"></ul>
