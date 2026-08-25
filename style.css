@@ -530,8 +530,10 @@ h2 { font-size: 22px; margin: 0 0 16px; }
   margin-bottom: 16px;
 }
 
-#export-report-btn {
+#export-report-btn,
+#export-equipment-report-btn {
   margin-top: 12px;
+  margin-bottom: 16px;
   padding: 10px 16px;
   border: none;
   border-radius: 8px;

@@ -1639,3 +1639,94 @@ document.getElementById('add-consumable-form').addEventListener('submit', async 
   document.getElementById('new-consumable-qty').value = 1
   loadConsumableLog()
 })
+
+// --- Equipment report export (Assets + Consumables + Requests) ---
+// Same xlsx-js-style approach as the Tickets report above - a full
+// extract, not date-filtered, since "how many of each are unassigned/
+// due for renewal right now" is a point-in-time question rather than
+// something scoped to a date range.
+
+document.getElementById('export-equipment-report-btn').addEventListener('click', async () => {
+  let assets, consumables, requests
+  try {
+    ;[assets, consumables, requests] = await Promise.all([
+      fetchAllRows(() => supabase.from('equipment_assets').select('*').order('type', { ascending: true })),
+      fetchAllRows(() => supabase.from('equipment_consumable_log').select('*').order('given_at', { ascending: false })),
+      fetchAllRows(() => supabase.from('equipment_requests').select('*').order('created_at', { ascending: false })),
+    ])
+  } catch (error) {
+    alert('Could not build report: ' + error.message)
+    return
+  }
+
+  const { data: profiles } = await supabase.from('profiles').select('id,email')
+  const emailById = new Map((profiles || []).map((p) => [p.id, p.email]))
+
+  const wb = XLSX.utils.book_new()
+
+  // ---- Summary sheet ----
+  const dueCount = assets.filter((a) => a.status === 'Assigned' && renewalDue(a.assigned_at, a.type)).length
+  const byType = countBy(assets, (a) => a.type)
+  const byStatus = countBy(assets, (a) => a.status)
+
+  const summaryRows = [
+    ['Equipment Report Summary'],
+    [`Generated: ${formatDateTime(nowIso())}`],
+    [`Total IT Assets: ${assets.length}`],
+    [`Assigned assets due for renewal: ${dueCount}`],
+    [`Total consumable handouts logged: ${consumables.length}`],
+    [`Total equipment requests: ${requests.length}`],
+    [],
+    ['Assets by Type'],
+    ...byType,
+    [],
+    ['Assets by Status'],
+    ...byStatus,
+  ]
+
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows)
+  summarySheet['!cols'] = [{ wch: 30 }, { wch: 12 }]
+  styleCell(summarySheet, 0, 0, { font: { bold: true, sz: 14 } })
+  styleCell(summarySheet, 7, 0, SECTION_FONT)
+  styleCell(summarySheet, 8 + byType.length + 1, 0, SECTION_FONT)
+  XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary')
+
+  // ---- Assets sheet ----
+  const assetHeader = ['Type', 'Model', 'Serial Number', 'Status', 'Assigned To', 'Assigned Date', 'Renewal Due', 'Notes']
+  const assetRows = assets.map((a) => [
+    a.type, a.model || '', a.serial_number || '', a.status,
+    a.assigned_to ? (emailById.get(a.assigned_to) || 'Unknown') : '',
+    a.assigned_at || '',
+    a.status === 'Assigned' && renewalDue(a.assigned_at, a.type) ? 'Yes' : '',
+    a.notes || '',
+  ])
+  const assetSheet = XLSX.utils.aoa_to_sheet([assetHeader, ...assetRows])
+  assetSheet['!cols'] = [{ wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 12 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 30 }]
+  assetSheet['!freeze'] = { xSplit: 0, ySplit: 1 }
+  assetHeader.forEach((_, col) => styleCell(assetSheet, 0, col, { font: HEADER_FONT, fill: { patternType: 'solid', ...HEADER_FILL } }))
+  XLSX.utils.book_append_sheet(wb, assetSheet, 'Assets')
+
+  // ---- Consumables sheet ----
+  const consumableHeader = ['Type', 'Given To', 'Quantity', 'Date', 'Notes']
+  const consumableRows = consumables.map((c) => [
+    c.type, emailById.get(c.given_to) || 'Unknown', c.quantity, c.given_at, c.notes || '',
+  ])
+  const consumableSheet = XLSX.utils.aoa_to_sheet([consumableHeader, ...consumableRows])
+  consumableSheet['!cols'] = [{ wch: 14 }, { wch: 24 }, { wch: 10 }, { wch: 14 }, { wch: 30 }]
+  consumableSheet['!freeze'] = { xSplit: 0, ySplit: 1 }
+  consumableHeader.forEach((_, col) => styleCell(consumableSheet, 0, col, { font: HEADER_FONT, fill: { patternType: 'solid', ...HEADER_FILL } }))
+  XLSX.utils.book_append_sheet(wb, consumableSheet, 'Consumables')
+
+  // ---- Requests sheet ----
+  const requestHeader = ['Requested By', 'Type', 'Status', 'Reason', 'Requested', 'Admin Note']
+  const requestRows = requests.map((r) => [
+    emailById.get(r.requested_by) || 'Unknown', r.type, r.status, r.reason || '', formatDateTime(r.created_at), r.admin_note || '',
+  ])
+  const requestSheet = XLSX.utils.aoa_to_sheet([requestHeader, ...requestRows])
+  requestSheet['!cols'] = [{ wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 34 }, { wch: 16 }, { wch: 30 }]
+  requestSheet['!freeze'] = { xSplit: 0, ySplit: 1 }
+  requestHeader.forEach((_, col) => styleCell(requestSheet, 0, col, { font: HEADER_FONT, fill: { patternType: 'solid', ...HEADER_FILL } }))
+  XLSX.utils.book_append_sheet(wb, requestSheet, 'Requests')
+
+  XLSX.writeFile(wb, `Equipment_Report_${new Date().toISOString().slice(0, 10)}.xlsx`)
+})
