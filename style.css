@@ -881,3 +881,18 @@ h2 { font-size: 22px; margin: 0 0 16px; }
   from { transform: scale(0); }
   to { transform: scale(1); }
 }
+
+/* ============================== Credit ============================== */
+
+#site-credit {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 6px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--gray);
+  opacity: 0.7;
+  pointer-events: none;
+  z-index: 5;
+}
