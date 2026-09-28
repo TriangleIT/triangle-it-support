@@ -2,24 +2,30 @@ name: Keep Supabase awake
 
 # Two separate auto-pause risks, both closed by this one workflow:
 # 1. Supabase's free tier pauses a project after 7 days with zero
-#    database activity - the curl step below pings it every 3 days,
-#    comfortably inside that window.
+#    database activity. A read-only select used to be the "ping" here,
+#    but the project paused anyway on 2026-09-28 despite that ping
+#    reporting success every run - a read apparently isn't reliable
+#    enough activity. The fix: the PATCH step below WRITES a fresh
+#    timestamp into a dedicated, hidden public.system_heartbeat table
+#    (see M11 in the schema) every day - unambiguous real activity,
+#    comfortably inside Supabase's 7-day pause window.
 # 2. GitHub itself disables a *scheduled* workflow after 60 days with
 #    zero OTHER repo activity - a scheduled run's own execution does
 #    NOT count as "activity" for that rule, only real commits/pushes
 #    do. So the commit step below makes this workflow generate its own
-#    tiny, harmless commit every time it runs (every 3 days, far more
-#    often than the 60-day threshold), which resets that clock
-#    automatically - fully self-sustaining, no human ever needs to
-#    touch this again.
+#    tiny, harmless commit every time it runs (daily, far more often
+#    than the 60-day threshold), which resets that clock automatically
+#    - fully self-sustaining, no human ever needs to touch this again.
 #
-# No secrets needed for either step: the Supabase key is meant to be
-# public (same one already embedded in app.js), and the commit uses
-# GitHub Actions' own built-in repo-write token.
+# No secrets needed for any step: the Supabase key is meant to be
+# public (same one already embedded in app.js - RLS on
+# system_heartbeat only allows updating that one hidden row, nothing
+# else), and the commit uses GitHub Actions' own built-in repo-write
+# token.
 
 on:
   schedule:
-    - cron: '0 6 */3 * *'
+    - cron: '0 6 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -31,7 +37,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ping ticket_taxonomy table
+      - name: Write a real heartbeat (not just a read) to keep the project active
+        run: |
+          curl -sS -o /dev/null -w "HTTP %{http_code}\n" -X PATCH \
+            "https://rtytofraoboczpelvpqi.supabase.co/rest/v1/system_heartbeat?id=eq.1" \
+            -H "apikey: sb_publishable_IPyRE7yRASw-Mh_jVk5uXA_4ztmmS3H" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "{\"last_ping\": \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"}"
+
+      - name: Ping ticket_taxonomy table (diagnostic only, kept for visibility)
         run: |
           curl -sS -o /dev/null -w "HTTP %{http_code}\n" \
             "https://rtytofraoboczpelvpqi.supabase.co/rest/v1/ticket_taxonomy?select=id&limit=1" \
